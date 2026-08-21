@@ -1,0 +1,94 @@
+// ReachInbox Email Job Scheduler — Prisma schema (PostgreSQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EmailStatus {
+  PENDING     // row created, not yet handed to BullMQ (transient)
+  SCHEDULED   // delayed job sitting in BullMQ, waiting for scheduledAt
+  SENDING     // claimed by a worker, in-flight
+  SENT        // delivered successfully via Ethereal SMTP
+  FAILED      // exhausted retries
+  RESCHEDULED // was throttled by the rate limiter and pushed to a later slot
+}
+
+model User {
+  id        String   @id @default(uuid())
+  googleId  String   @unique
+  email     String   @unique
+  name      String
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  senders Sender[]
+  batches Batch[]
+}
+
+model Sender {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label     String
+  email     String
+  smtpHost  String
+  smtpPort  Int
+  smtpUser  String
+  smtpPass  String
+  createdAt DateTime @default(now())
+
+  batches   Batch[]
+  emailJobs EmailJob[]
+
+  @@index([userId])
+}
+
+model Batch {
+  id                    String   @id @default(uuid())
+  userId                String
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  senderId              String
+  sender                Sender   @relation(fields: [senderId], references: [id])
+  subject               String
+  body                  String   @db.Text
+  startTime             DateTime
+  delayBetweenEmailsSec Int
+  hourlyLimit           Int
+  totalRecipients       Int
+  createdAt             DateTime @default(now())
+
+  emailJobs EmailJob[]
+
+  @@index([userId])
+}
+
+model EmailJob {
+  id              String      @id @default(uuid())
+  batchId         String
+  batch           Batch       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  senderId        String
+  sender          Sender      @relation(fields: [senderId], references: [id])
+  recipientEmail  String
+  subject         String
+  body            String      @db.Text
+  sequence        Int
+  scheduledAt     DateTime
+  status          EmailStatus @default(PENDING)
+  attempts        Int         @default(0)
+  rescheduleCount Int         @default(0)
+  lastError       String?
+  previewUrl      String?
+  sentAt          DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([status, scheduledAt])
+  @@index([senderId, status])
+  @@index([batchId])
+}
