@@ -6,6 +6,7 @@ import { signSessionToken, SESSION_COOKIE_NAME } from "./jwt";
 import { ensureDefaultSender } from "../senders/senderService";
 import { requireAuth } from "../middleware/auth";
 import { env } from "../config/env";
+import { ApiError } from "../middleware/errorHandler";
 
 export const authRouter = Router();
 
@@ -18,7 +19,17 @@ const COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 authRouter.post("/google", async (req, res, next) => {
   try {
     const { idToken } = googleLoginSchema.parse(req.body);
-    const profile = await verifyGoogleIdToken(idToken);
+
+    let profile;
+    try {
+      profile = await verifyGoogleIdToken(idToken);
+    } catch (err) {
+      // Most commonly a stale id_token (Google tokens expire after ~1h) —
+      // a clean 401 tells the frontend to fall back/re-auth instead of
+      // surfacing this as a generic server error.
+      const message = err instanceof Error ? err.message : "Invalid Google ID token";
+      throw new ApiError(401, message);
+    }
 
     const user = await prisma.user.upsert({
       where: { googleId: profile.googleId },
